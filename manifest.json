@@ -1,19 +1,19 @@
 {
-  "name": "Tracker Fiscal FIFO USD",
+  "name": "Tracker Fiscal FIFO",
   "short_name": "Fiscal Tracker",
-  "description": "Tracker fiscal FIFO USD con dividendos e importación CSV",
-  "start_url": "./index.html",
+  "description": "Tracker fiscal FIFO USD con conexión BCE e importación/exportación CSV Excel",
+  "start_url": ".",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#ffffff",
+  "theme_color": "#333333",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/2910/2910311.png",
+      "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": ".https://cdn-icons-png.flaticon.com/512/2910/2910311.png",
+      "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
