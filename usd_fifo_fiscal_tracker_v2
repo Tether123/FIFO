@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tracker Fiscal FIFO USD</title>
+  
+  <!-- Configuración PWA -->
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="Tracker fiscal FIFO USD con dividendos e importación CSV">
+
+  <style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans, system-ui, sans-serif); font-size: 14px; color: var(--color-text-primary, #333); }
+  .app { padding: 1rem 0; }
+  .tabs { display: flex; gap: 2px; border-bottom: 0.5px solid var(--color-border-tertiary, #ccc); margin-bottom: 1.5rem; overflow-x: auto; }
+  .tab { padding: 7px 13px; border: none; background: none; cursor: pointer; font-size: 12px; color: var(--color-text-secondary, #666); border-bottom: 2px solid transparent; margin-bottom: -0.5px; white-space: nowrap; font-family: var(--font-sans, system-ui, sans-serif); }
+  .tab.active { color: var(--color-text-primary, #333); border-bottom-color: var(--color-text-primary, #333); font-weight: 500; }
+  .tab:hover:not(.active) { color: var(--color-text-primary, #333); }
+  .section { background: var(--color-background-primary, #fff); border: 0.5px solid var(--color-border-tertiary, #ccc); border-radius: var(--border-radius-lg, 8px); padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .stitle { font-size: 11px; font-weight: 500; color: var(--color-text-secondary, #666); margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .fg { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; color: var(--color-text-secondary, #666); font-weight: 500; }
+  .field input, .field select { font-size: 12px; padding: 5px 7px; background: var(--color-background-secondary, #f9f9f9); border: 0.5px solid var(--color-border-secondary, #ddd); border-radius: var(--border-radius-md, 4px); color: var(--color-text-primary, #333); font-family: var(--font-mono, monospace); }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--color-border-primary, #aaa); }
+  .btn { padding: 6px 14px; border: 0.5px solid var(--color-border-secondary, #ddd); border-radius: var(--border-radius-md, 4px); background: transparent; cursor: pointer; font-size: 12px; font-family: var(--font-sans, system-ui, sans-serif); color: var(--color-text-primary, #333); }
+  .btn:hover { background: var(--color-background-secondary, #f9f9f9); }
+  .btn.primary { background: var(--color-text-primary, #333); color: var(--color-background-primary, #fff); border-color: var(--color-text-primary, #333); }
+  .btn.primary:hover { opacity: 0.85; }
+  .btn.danger { color: var(--color-text-danger, #d32f2f); border-color: var(--color-border-danger, #f44336); }
+  .btn.danger:hover { background: var(--color-background-danger, #ffebee); }
+  .btn.success { color: var(--color-text-success, #2e7d32); border-color: var(--color-border-success, #4caf50); }
+  .btn.success:hover { background: var(--color-background-success, #e8f5e9); }
+  .tw { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-size: 11px; font-weight: 500; color: var(--color-text-secondary, #666); padding: 5px 7px; border-bottom: 0.5px solid var(--color-border-tertiary, #ccc); white-space: nowrap; }
+  td { padding: 7px 7px; border-bottom: 0.5px solid var(--color-border-tertiary, #ccc); }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--font-mono, monospace); }
+  .pos { color: var(--color-text-success, #2e7d32); }
+  .neg { color: var(--color-text-danger, #d32f2f); }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: var(--border-radius-md, 4px); font-size: 10px; font-weight: 500; }
+  .b-buy { background: var(--color-background-info, #e3f2fd); color: var(--color-text-info, #1976d2); }
+  .b-sell { background: var(--color-background-warning, #fff3e0); color: var(--color-text-warning, #f57c00); }
+  .b-div { background: var(--color-background-success, #e8f5e9); color: var(--color-text-success, #2e7d32); }
+  .b-dep { background: var(--color-background-secondary, #f5f5f5); color: var(--color-text-secondary, #666); }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 1rem; }
+  .metric { background: var(--color-background-secondary, #f9f9f9); border-radius: var(--border-radius-md, 4px); padding: 10px 12px; }
+  .metric-label { font-size: 10px; color: var(--color-text-secondary, #666); margin-bottom: 3px; }
+  .metric-value { font-size: 18px; font-weight: 500; font-family: var(--font-mono, monospace); }
+  .tramo { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 0.5px solid var(--color-border-tertiary, #ccc); font-size: 12px; }
+  .tramo:last-child { border-bottom: none; }
+  .alert { padding: 8px 12px; border-radius: var(--border-radius-md, 4px); font-size: 12px; margin-bottom: 10px; }
+  .al-warn { background: var(--color-background-warning, #fff3e0); color: var(--color-text-warning, #f57c00); border: 0.5px solid var(--color-border-warning, #ffb74d); }
+  .al-info { background: var(--color-background-info, #e3f2fd); color: var(--color-text-info, #1976d2); border: 0.5px solid var(--color-border-info, #64b5f6); }
+  .al-suc { background: var(--color-background-success, #e8f5e9); color: var(--color-text-success, #2e7d32); border: 0.5px solid var(--color-border-success, #81c784); }
+  .empty { text-align: center; padding: 1.5rem; color: var(--color-text-secondary, #666); font-size: 12px; }
+  .code-block { background: var(--color-background-secondary, #f9f9f9); border: 0.5px solid var(--color-border-tertiary, #ccc); border-radius: var(--border-radius-md, 4px); padding: 10px 12px; font-family: var(--font-mono, monospace); font-size: 11px; line-height: 1.6; margin-bottom: 10px; overflow-x: auto; white-space: pre; }
+  .upload-area { border: 1.5px dashed var(--color-border-secondary, #ddd); border-radius: var(--border-radius-lg, 8px); padding: 1.5rem; text-align: center; cursor: pointer; margin-bottom: 10px; }
+  .upload-area:hover { background: var(--color-background-secondary, #f9f9f9); }
+  .yr-btn { padding: 4px 10px; font-size: 11px; border: 0.5px solid var(--color-border-secondary, #ddd); border-radius: var(--border-radius-md, 4px); background: transparent; cursor: pointer; font-family: var(--font-sans, system-ui, sans-serif); color: var(--color-text-secondary, #666); }
+  .yr-btn.active { background: var(--color-text-primary, #333); color: var(--color-background-primary, #fff); border-color: var(--color-text-primary, #333); }
+  </style>
+</head>
+<body>
+
+  <h2 class="sr-only" style="display:none;">Tracker fiscal FIFO USD con dividendos, comisiones e importación CSV</h2>
+  <div class="app" id="root" style="max-width: 900px; margin: 0 auto; padding: 1rem;"></div>
+
+  <script>
+  const S = {
+    tab: 'dashboard',
+    deposits: [],
+    operations: [],
+    dividends: [],
+    fiscalYear: new Date().getFullYear(),
+    depForm: { date:'', amountUSD:'', rateEURUSD:'', commissionEUR:'', notes:'' },
+    opForm: { date:'', type:'buy', company:'', shares:'', priceUSD:'', rateEURUSD:'', commissionEUR:'', notes:'' },
+    divForm: { date:'', company:'', grossUSD:'', withholdingPct:'15', rateEURUSD:'', notes:'' },
+    importMsg: null,
+  };
+
+  const fmt = (n,d=2) => isNaN(n)?'—':Number(n).toLocaleString('es-ES',{minimumFractionDigits:d,maximumFractionDigits:d});
+  const fmtUSD = n => isNaN(n)?'—':'$'+fmt(n);
+  const fmtEUR = n => isNaN(n)?'—':fmt(n)+' €';
+  const fmtPct = n => fmt(n)+'%';
+  const today = () => new Date().toISOString().slice(0,10);
+  const uid = () => 'id_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+  const gn = (n,d=2) => { const v=parseFloat(n); return isNaN(v)?0:v; };
+
+  function calcFIFO(ops) {
+    const lots = {}, results = [];
+    const sorted = [...ops].sort((a,b) => a.date.localeCompare(b.date));
+    for (const op of sorted) {
+      const co = op.company;
+      if (!lots[co]) lots[co] = [];
+      if (op.type === 'buy') {
+        const costEUR = (gn(op.shares)*gn(op.priceUSD))/gn(op.rateEURUSD) + gn(op.commissionEUR);
+        lots[co].push({ shares:gn(op.shares), priceUSD:gn(op.priceUSD), rateEURUSD:gn(op.rateEURUSD), commission:gn(op.commissionEUR), costEUR, date:op.date, id:op.id });
+        results.push({...op, gainEUR:null, costBasisEUR:null, remainingLots:lots[co].map(l=>({...l}))});
+      } else {
+        let toSell = gn(op.shares);
+        const queue = lots[co];
+        let costBasisEUR = 0;
+        const usedLots = [];
+        while (toSell > 0.00001 && queue.length > 0) {
+          const lot = queue[0];
+          const used = Math.min(lot.shares, toSell);
+          const frac = used / lot.shares;
+          const lotCostEUR = lot.costEUR * frac;
+          costBasisEUR += lotCostEUR;
+          usedLots.push({ shares:used, priceUSD:lot.priceUSD, rateEURUSD:lot.rateEURUSD, date:lot.date, costEUR:lotCostEUR });
+          toSell -= used;
+          lot.shares -= used;
+          lot.costEUR -= lotCostEUR;
+          if (lot.shares < 0.00001) queue.shift();
+        }
+        const saleRevenueEUR = (gn(op.shares)*gn(op.priceUSD))/gn(op.rateEURUSD) - gn(op.commissionEUR);
+        const gainEUR = saleRevenueEUR - costBasisEUR;
+        results.push({...op, gainEUR, costBasisEUR, saleRevenueEUR, usedLots, remainingLots:lots[co].map(l=>({...l}))});
+      }
+    }
+    return { results, lots };
+  }
+
+  function calcIRPF(base) {
+    if (base <= 0) return { tax:0, tramos:[] };
+    const bk = [{lim:6000,rate:0.19,label:'Hasta 6.000 €'},{lim:44000,rate:0.21,label:'6.000 – 50.000 €'},{lim:150000,rate:0.23,label:'50.000 – 200.000 €'},{lim:100000,rate:0.27,label:'200.000 – 300.000 €'},{lim:Infinity,rate:0.28,label:'Más de 300.000 €'}];
+    let rem = base, tax = 0;
+    const tramos = [];
+    for (const b of bk) { if (rem <= 0) break; const t = Math.min(rem,b.lim); const c = t*b.rate; tax+=c; tramos.push({label:b.label,rate:b.rate,base:t,tax:c}); rem-=t; }
+    return { tax, tramos };
+  }
+
+  const YEARS = () => {
+    const ys = new Set();
+    [...S.deposits,...S.operations,...S.dividends].forEach(x => { if(x.date) ys.add(x.date.slice(0,4)); });
+    const cur = String(new Date().getFullYear());
+    ys.add(cur);
+    return [...ys].sort();
+  };
+
+  function inYear(item) { return item.date && item.date.startsWith(String(S.fiscalYear)); }
+
+  function exportCSV() {
+    const { results } = calcFIFO(S.operations);
+    const fifoMap = {};
+    results.forEach(r => { fifoMap[r.id] = r; });
+    const rows = [['tipo','fecha','empresa','acciones','precio_usd','tipo_cambio_eur_usd','comision_eur','dividendo_bruto_usd','retencion_pct','deposito_usd','ingreso_eur','coste_base_eur','ganancia_eur','notas']];
+    S.deposits.filter(inYear).forEach(d => {
+      const eur = gn(d.amountUSD)/gn(d.rateEURUSD);
+      rows.push(['deposito',d.date,'','','',d.rateEURUSD,d.commissionEUR||0,'','',d.amountUSD,fmt(eur),'','',d.notes||'']);
+    });
+    S.operations.filter(inYear).forEach(op => {
+      const r = fifoMap[op.id]||{};
+      rows.push([op.type==='buy'?'compra':'venta',op.date,op.company,op.shares,op.priceUSD,op.rateEURUSD,op.commissionEUR||0,'','','',op.type==='sell'?fmt(r.saleRevenueEUR||0):'',op.type==='sell'?fmt(r.costBasisEUR||0):'',op.type==='sell'?fmt(r.gainEUR||0):'',op.notes||'']);
+    });
+    S.dividends.filter(inYear).forEach(d => {
+      const gross = gn(d.grossUSD)/gn(d.rateEURUSD);
+      const wh = gross * gn(d.withholdingPct)/100;
+      rows.push(['dividendo',d.date,d.company,'','',d.rateEURUSD,0,d.grossUSD,d.withholdingPct,'',fmt(gross),fmt(wh),fmt(gross-wh),d.notes||'']);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `fiscal_usd_${S.fiscalYear}.csv`;
+    a.click();
+  }
+
+  function parseImportCSV(text) {
+    const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return { ok:0, err:['Archivo vacío o sin datos'] };
+    const header = lines[0].replace(/"/g,'').toLowerCase().split(',').map(h=>h.trim());
+    const idx = (name) => header.indexOf(name);
+    const required = ['tipo','fecha','tipo_cambio_eur_usd'];
+    const missing = required.filter(h => idx(h) === -1);
+    if (missing.length) return { ok:0, err:['Columnas faltantes: '+missing.join(', ')] };
+    let ok=0; const errs=[];
+    for (let i=1;i<lines.length;i++) {
+      const raw = lines[i];
+      const cols = [];
+      let inQ=false, cur='';
+      for (let c=0;c<raw.length;c++) {
+        if (raw[c]==='"') { inQ=!inQ; }
+        else if (raw[c]===',' && !inQ) { cols.push(cur.trim()); cur=''; }
+        else cur+=raw[c];
+      }
+      cols.push(cur.trim());
+      const g = (name) => (cols[idx(name)]||'').replace(/"/g,'').trim();
+      const tipo = g('tipo').toLowerCase();
+      const fecha = g('fecha');
+      const rate = g('tipo_cambio_eur_usd');
+      if (!fecha||!rate) { errs.push(`Línea ${i+1}: fecha o tipo_cambio vacíos`); continue; }
+      try {
+        if (tipo==='deposito') {
+          const dep = g('deposito_usd');
+          if (!dep) { errs.push(`Línea ${i+1}: deposito_usd vacío`); continue; }
+          S.deposits.push({ id:uid(), date:fecha, amountUSD:dep, rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
+          ok++;
+        } else if (tipo==='compra'||tipo==='buy') {
+          S.operations.push({ id:uid(), date:fecha, type:'buy', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
+          ok++;
+        } else if (tipo==='venta'||tipo==='sell') {
+          S.operations.push({ id:uid(), date:fecha, type:'sell', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
+          ok++;
+        } else if (tipo==='dividendo'||tipo==='dividend') {
+          S.dividends.push({ id:uid(), date:fecha, company:g('empresa'), grossUSD:g('dividendo_bruto_usd'), withholdingPct:g('retencion_pct')||'0', rateEURUSD:rate, notes:g('notas') });
+          ok++;
+        } else { errs.push(`Línea ${i+1}: tipo desconocido "${tipo}"`); }
+      } catch(e) { errs.push(`Línea ${i+1}: error al procesar`); }
+    }
+    return { ok, errs };
+  }
+
+  function render() {
+    const { tab, fiscalYear } = S;
+    const { results: fifoAll, lots } = calcFIFO(S.operations);
+    const fifoYear = fifoAll.filter(inYear);
+    const depsYear = S.deposits.filter(inYear);
+    const divsYear = S.dividends.filter(inYear);
+
+    const totalDepUSD = depsYear.reduce((s,d)=>s+gn(d.amountUSD),0);
+    const totalDepEUR = depsYear.reduce((s,d)=>s+gn(d.amountUSD)/gn(d.rateEURUSD),0);
+    const totalDepComm = depsYear.reduce((s,d)=>s+gn(d.commissionEUR),0);
+
+    const sells = fifoYear.filter(r=>r.type==='sell');
+    const totalGainEUR = sells.reduce((s,r)=>s+(r.gainEUR||0),0);
+    const totalGainPos = sells.filter(r=>r.gainEUR>0).reduce((s,r)=>s+r.gainEUR,0);
+    const totalGainNeg = sells.filter(r=>r.gainEUR<0).reduce((s,r)=>s+r.gainEUR,0);
+
+    const divGrossEUR = divsYear.reduce((s,d)=>s+gn(d.grossUSD)/gn(d.rateEURUSD),0);
+    const divWhEUR = divsYear.reduce((s,d)=>s+(gn(d.grossUSD)/gn(d.rateEURUSD))*gn(d.withholdingPct)/100,0);
+    const divNetEUR = divGrossEUR - divWhEUR;
+
+    const baseAhorro = Math.max(0, totalGainEUR) + divGrossEUR;
+    const { tax, tramos } = calcIRPF(baseAhorro);
+    const taxCredit = Math.min(divWhEUR, divGrossEUR * 0.19);
+    const taxFinal = Math.max(0, tax - taxCredit);
+
+    const companies = [...new Set(S.operations.map(o=>o.company))];
+    const years = YEARS();
+
+    const yearSelector = `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:1rem">
+      <span style="font-size:11px;color:var(--color-text-secondary);">Año fiscal:</span>
+      ${years.map(y=>`<button class="yr-btn ${String(y)===String(fiscalYear)?'active':''}" onclick="setYear('${y}')">${y}</button>`).join('')}
+    </div>`;
+
+    let content = '';
+
+    if (tab === 'dashboard') {
+      content = `
+      ${yearSelector}
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Depositado (EUR equiv.)</div><div class="metric-value mono">${fmtEUR(totalDepEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Ganancias cap. netas</div><div class="metric-value mono ${totalGainEUR>=0?'pos':'neg'}">${(totalGainEUR>=0?'+':'')+fmtEUR(totalGainEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Dividendos brutos</div><div class="metric-value mono pos">+${fmtEUR(divGrossEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Cuota IRPF estimada</div><div class="metric-value mono ${taxFinal>0?'neg':''}">${taxFinal>0?fmtEUR(taxFinal):'—'}</div></div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Plusvalías</div><div class="metric-value mono pos">+${fmtEUR(totalGainPos)}</div></div>
+        <div class="metric"><div class="metric-label">Minusvalías</div><div class="metric-value mono neg">${fmtEUR(totalGainNeg)}</div></div>
+        <div class="metric"><div class="metric-label">Retención EE.UU.</div><div class="metric-value mono">${fmtEUR(divWhEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Crédito doble imposición</div><div class="metric-value mono pos">-${fmtEUR(taxCredit)}</div></div>
+      </div>
+      ${sells.length>0||divsYear.length>0?`<div class="section"><div class="stitle">Base del ahorro ${fiscalYear}</div>
+        <div class="tramo"><span>Ganancias patrimoniales</span><span class="mono ${totalGainEUR>=0?'pos':'neg'}">${(totalGainEUR>=0?'+':'')+fmtEUR(totalGainEUR)}</span></div>
+        <div class="tramo"><span>Dividendos brutos</span><span class="mono pos">+${fmtEUR(divGrossEUR)}</span></div>
+        <div class="tramo" style="font-weight:500"><span>Base total</span><span class="mono">${fmtEUR(baseAhorro)}</span></div>
+        <div class="tramo"><span>Cuota bruta</span><span class="mono neg">${fmtEUR(tax)}</span></div>
+        <div class="tramo"><span>Deducción doble imposición (art. 80 LIRPF)</span><span class="mono pos">-${fmtEUR(taxCredit)}</span></div>
+        <div class="tramo" style="font-weight:500"><span>Cuota estimada final</span><span class="mono neg">${fmtEUR(taxFinal)}</span></div>
+      </div>`:''}`;
+    }
+
+    if (tab === 'depositos') {
+      content = `
+      <div class="section"><div class="stitle">Nuevo depósito</div>
+        <div class="fg">
+          <div class="field"><label>Fecha</label><input type="date" value="${S.depForm.date||today()}" onchange="upDep('date',this.value)"></div>
+          <div class="field"><label>Importe (USD)</label><input type="number" step="0.01" placeholder="1000.00" value="${S.depForm.amountUSD}" onchange="upDep('amountUSD',this.value)"></div>
+          <div class="field"><label>Tipo €/$ (BOE)</label><input type="number" step="0.0001" placeholder="1.0850" value="${S.depForm.rateEURUSD}" onchange="upDep('rateEURUSD',this.value)"></div>
+          <div class="field"><label>Comisión cambio (€)</label><input type="number" step="0.01" placeholder="2.50" value="${S.depForm.commissionEUR}" onchange="upDep('commissionEUR',this.value)"></div>
+          <div class="field"><label>Notas</label><input type="text" placeholder="Transferencia, nómina..." value="${S.depForm.notes}" onchange="upDep('notes',this.value)"></div>
+        </div>
+        ${S.depForm.amountUSD&&S.depForm.rateEURUSD?`<div class="alert al-info">Equivalente: <strong>${fmtEUR(gn(S.depForm.amountUSD)/gn(S.depForm.rateEURUSD))}</strong>${S.depForm.commissionEUR?' — Comisión: '+fmtEUR(gn(S.depForm.commissionEUR)):''}</div>`:''}
+        <button class="btn primary" onclick="addDeposit()">+ Añadir depósito</button>
+      </div>
+      <div class="section"><div class="stitle">Historial · todos los años</div>
+      ${S.deposits.length===0?`<div class="empty">Sin depósitos registrados</div>`:`
+      <div class="tw"><table>
+        <tr><th>Fecha</th><th>USD</th><th>Tipo €/$</th><th>EUR equiv.</th><th>Comis. €</th><th>EUR neto</th><th>Notas</th><th></th></tr>
+        ${S.deposits.sort((a,b)=>a.date.localeCompare(b.date)).map((d,i)=>{
+          const eur=gn(d.amountUSD)/gn(d.rateEURUSD);
+          const net=eur-gn(d.commissionEUR);
+          return `<tr><td class="mono">${d.date}</td><td class="mono">${fmtUSD(d.amountUSD)}</td><td class="mono">${d.rateEURUSD}</td><td class="mono">${fmtEUR(eur)}</td><td class="mono ${gn(d.commissionEUR)>0?'neg':''}">${gn(d.commissionEUR)>0?fmtEUR(gn(d.commissionEUR)):'—'}</td><td class="mono">${fmtEUR(net)}</td><td style="font-size:11px">${d.notes||'—'}</td><td><button class="btn danger" onclick="removeDeposit('${d.id}')">×</button></td></tr>`;
+        }).join('')}
+      </table></div>`}
+      </div>`;
+    }
+
+    if (tab === 'operaciones') {
+      content = `
+      <div class="section"><div class="stitle">Nueva operación</div>
+        <div class="fg">
+          <div class="field"><label>Fecha</label><input type="date" value="${S.opForm.date||today()}" onchange="upOp('date',this.value)"></div>
+          <div class="field"><label>Tipo</label><select onchange="upOp('type',this.value)"><option value="buy" ${S.opForm.type==='buy'?'selected':''}>Compra</option><option value="sell" ${S.opForm.type==='sell'?'selected':''}>Venta</option></select></div>
+          <div class="field"><label>Compañía / Ticker</label><input type="text" placeholder="AAPL" value="${S.opForm.company}" onchange="upOp('company',this.value)"></div>
+          <div class="field"><label>Nº acciones</label><input type="number" step="0.0001" placeholder="10" value="${S.opForm.shares}" onchange="upOp('shares',this.value)"></div>
+          <div class="field"><label>Precio/acción (USD)</label><input type="number" step="0.01" placeholder="150.00" value="${S.opForm.priceUSD}" onchange="upOp('priceUSD',this.value)"></div>
+          <div class="field"><label>Tipo €/$ (BOE)</label><input type="number" step="0.0001" placeholder="1.0850" value="${S.opForm.rateEURUSD}" onchange="upOp('rateEURUSD',this.value)"></div>
+          <div class="field"><label>Comisión broker (€)</label><input type="number" step="0.01" placeholder="5.00" value="${S.opForm.commissionEUR}" onchange="upOp('commissionEUR',this.value)"></div>
+          <div class="field"><label>Notas</label><input type="text" placeholder="Broker, mercado..." value="${S.opForm.notes}" onchange="upOp('notes',this.value)"></div>
+        </div>
+        ${S.opForm.shares&&S.opForm.priceUSD&&S.opForm.rateEURUSD?`<div class="alert al-info">
+          Total bruto: <strong>${fmtUSD(gn(S.opForm.shares)*gn(S.opForm.priceUSD))}</strong> = <strong>${fmtEUR(gn(S.opForm.shares)*gn(S.opForm.priceUSD)/gn(S.opForm.rateEURUSD))}</strong>
+          ${S.opForm.commissionEUR?' — Comisión: '+fmtEUR(gn(S.opForm.commissionEUR)):''}
+        </div>`:''}
+        <button class="btn primary" onclick="addOperation()">+ Añadir operación</button>
+      </div>
+      <div class="section"><div class="stitle">Historial · todos los años</div>
+      ${S.operations.length===0?`<div class="empty">Sin operaciones registradas</div>`:`
+      <div class="tw"><table>
+        <tr><th>Fecha</th><th>Tipo</th><th>Compañía</th><th>Acc.</th><th>Precio USD</th><th>Tipo €/$</th><th>Total EUR</th><th>Comis. €</th><th>Notas</th><th></th></tr>
+        ${[...S.operations].sort((a,b)=>a.date.localeCompare(b.date)).map(op=>`<tr>
+          <td class="mono">${op.date}</td>
+          <td><span class="badge b-${op.type}">${op.type==='buy'?'Compra':'Venta'}</span></td>
+          <td><strong>${op.company}</strong></td>
+          <td class="mono">${fmt(op.shares,4)}</td>
+          <td class="mono">${fmtUSD(op.priceUSD)}</td>
+          <td class="mono">${op.rateEURUSD}</td>
+          <td class="mono">${fmtEUR(gn(op.shares)*gn(op.priceUSD)/gn(op.rateEURUSD))}</td>
+          <td class="mono ${gn(op.commissionEUR)>0?'neg':''}">${gn(op.commissionEUR)>0?fmtEUR(gn(op.commissionEUR)):'—'}</td>
+          <td style="font-size:11px">${op.notes||'—'}</td>
+          <td><button class="btn danger" onclick="removeOp('${op.id}')">×</button></td>
+        </tr>`).join('')}
+      </table></div>`}
+      </div>`;
+    }
+
+    if (tab === 'dividendos') {
+      content = `
+      <div class="section"><div class="stitle">Nuevo dividendo</div>
+        <div class="fg">
+          <div class="field"><label>Fecha cobro</label><input type="date" value="${S.divForm.date||today()}" onchange="upDiv('date',this.value)"></div>
+          <div class="field"><label>Compañía / Ticker</label><input type="text" placeholder="AAPL" value="${S.divForm.company}" onchange="upDiv('company',this.value)"></div>
+          <div class="field"><label>Dividendo bruto (USD)</label><input type="number" step="0.01" placeholder="24.00" value="${S.divForm.grossUSD}" onchange="upDiv('grossUSD',this.value)"></div>
+          <div class="field"><label>Retención EE.UU. (%)</label><input type="number" step="0.1" placeholder="15" value="${S.divForm.withholdingPct}" onchange="upDiv('withholdingPct',this.value)"></div>
+          <div class="field"><label>Tipo €/$ (BOE)</label><input type="number" step="0.0001" placeholder="1.0850" value="${S.divForm.rateEURUSD}" onchange="upDiv('rateEURUSD',this.value)"></div>
+          <div class="field"><label>Notas</label><input type="text" placeholder="Q1 2024..." value="${S.divForm.notes}" onchange="upDiv('notes',this.value)"></div>
+        </div>
+        ${S.divForm.grossUSD&&S.divForm.rateEURUSD?`<div class="alert al-suc">
+          Bruto: <strong>${fmtEUR(gn(S.divForm.grossUSD)/gn(S.divForm.rateEURUSD))}</strong>
+          — Retención: <strong>${fmtEUR(gn(S.divForm.grossUSD)/gn(S.divForm.rateEURUSD)*gn(S.divForm.withholdingPct)/100)}</strong>
+          — Neto cobrado: <strong>${fmtEUR(gn(S.divForm.grossUSD)/gn(S.divForm.rateEURUSD)*(1-gn(S.divForm.withholdingPct)/100))}</strong>
+        </div>`:''}
+        <div class="alert al-info" style="margin-top:8px">La retención EE.UU. (convenio: 15%) es deducible en la declaración española (art. 80 LIRPF), hasta el límite de lo que correspondería en España.</div>
+        <button class="btn primary" onclick="addDiv()">+ Añadir dividendo</button>
+      </div>
+      <div class="section"><div class="stitle">Historial · todos los años</div>
+      ${S.dividends.length===0?`<div class="empty">Sin dividendos registrados</div>`:`
+      <div class="tw"><table>
+        <tr><th>Fecha</th><th>Compañía</th><th>Bruto USD</th><th>Tipo €/$</th><th>Bruto EUR</th><th>Ret. EE.UU.</th><th>Neto EUR</th><th>Notas</th><th></th></tr>
+        ${[...S.dividends].sort((a,b)=>a.date.localeCompare(b.date)).map(d=>{
+          const gross=gn(d.grossUSD)/gn(d.rateEURUSD);
+          const wh=gross*gn(d.withholdingPct)/100;
+          return `<tr>
+            <td class="mono">${d.date}</td><td><strong>${d.company}</strong></td>
+            <td class="mono">${fmtUSD(d.grossUSD)}</td><td class="mono">${d.rateEURUSD}</td>
+            <td class="mono pos">+${fmtEUR(gross)}</td>
+            <td class="mono neg">-${fmtEUR(wh)} (${d.withholdingPct}%)</td>
+            <td class="mono">${fmtEUR(gross-wh)}</td>
+            <td style="font-size:11px">${d.notes||'—'}</td>
+            <td><button class="btn danger" onclick="removeDiv('${d.id}')">×</button></td>
+          </tr>`;
+        }).join('')}
+      </table></div>`}
+      </div>`;
+    }
+
+    if (tab === 'fifo') {
+      content = `
+      <div class="alert al-info" style="margin-bottom:1rem">Coste base incluye comisiones del broker. Precio de venta neto descuenta comisiones. Criterio FIFO (art. 37 LIRPF).</div>
+      ${companies.length===0?`<div class="empty">Sin operaciones registradas</div>`:
+      companies.map(co=>{
+        const coR = fifoAll.filter(r=>r.company===co);
+        const rem = (lots[co]||[]);
+        const totalRemShares = rem.reduce((s,l)=>s+l.shares,0);
+        return `<div class="section"><div class="stitle">${co} — ${fmt(totalRemShares,4)} acc en cartera</div>
+          ${coR.map(op=>`<div style="border-bottom:0.5px solid var(--color-border-tertiary);padding:9px 0;">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div><span class="badge b-${op.type}" style="margin-right:6px">${op.type==='buy'?'Compra':'Venta'}</span><span class="mono" style="font-size:11px;color:var(--color-text-secondary)">${op.date}</span> <strong>${fmt(op.shares,4)} acc</strong> × ${fmtUSD(op.priceUSD)} ${gn(op.commissionEUR)>0?'<span style="font-size:11px;color:var(--color-text-danger)">+'+fmtEUR(gn(op.commissionEUR))+' comis.</span>':''}</div>
+              ${op.type==='sell'?`<div class="mono ${op.gainEUR>=0?'pos':'neg'}" style="font-weight:500">${(op.gainEUR>=0?'+':'')+fmtEUR(op.gainEUR)}</div>`:''}
+            </div>
+            ${op.type==='sell'?`<div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px">Ingresos netos: ${fmtEUR(op.saleRevenueEUR)} | Coste base FIFO: ${fmtEUR(op.costBasisEUR)}</div>
+            ${(op.usedLots||[]).map(l=>`<div style="font-size:11px;color:var(--color-text-secondary);margin-top:2px;padding-left:12px">↳ Lote ${l.date}: ${fmt(l.shares,4)} acc × ${fmtUSD(l.priceUSD)} @ ${l.rateEURUSD} = ${fmtEUR(l.costEUR)}</div>`).join('')}`:''}
+          </div>`).join('')}
+          ${rem.length>0?`<div style="margin-top:8px;font-size:11px;color:var(--color-text-secondary)">Lotes abiertos: ${rem.map(l=>`${fmt(l.shares,4)} acc (${l.date}, ${fmtUSD(l.priceUSD)}, coste ${fmtEUR(l.costEUR)})`).join(' | ')}</div>`:''}
+        </div>`;
+      }).join('')}`;
+    }
+
+    if (tab === 'fiscal') {
+      content = `
+      ${yearSelector}
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Ganancias patrimoniales</div><div class="metric-value mono ${totalGainEUR>=0?'pos':'neg'}">${(totalGainEUR>=0?'+':'')+fmtEUR(totalGainEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Dividendos brutos</div><div class="metric-value mono pos">+${fmtEUR(divGrossEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Base del ahorro</div><div class="metric-value mono">${fmtEUR(baseAhorro)}</div></div>
+        <div class="metric"><div class="metric-label">Cuota IRPF final</div><div class="metric-value mono neg">${fmtEUR(taxFinal)}</div></div>
+      </div>
+      ${baseAhorro>0?`
+      <div class="section"><div class="stitle">Tramos base del ahorro ${fiscalYear}</div>
+        ${tramos.map(t=>`<div class="tramo"><span>${t.label}</span><span style="display:flex;gap:20px"><span class="mono" style="color:var(--color-text-secondary)">${fmtEUR(t.base)} × ${fmtPct(t.rate*100)}</span><span class="mono" style="font-weight:500">${fmtEUR(t.tax)}</span></span></div>`).join('')}
+        <div class="tramo"><span>Cuota bruta</span><span class="mono neg" style="font-weight:500">${fmtEUR(tax)}</span></div>
+        <div class="tramo"><span>Deducción doble imposición (retención EE.UU.)</span><span class="mono pos">-${fmtEUR(taxCredit)}</span></div>
+        <div class="tramo" style="font-weight:500;border-top:0.5px solid var(--color-border-primary);margin-top:4px"><span>Cuota estimada final</span><span class="mono neg">${fmtEUR(taxFinal)}</span></div>
+        <div style="margin-top:8px;font-size:11px;color:var(--color-text-secondary)">Tipo efectivo: ${fmtPct(baseAhorro>0?taxFinal/baseAhorro*100:0)} · Solo base del ahorro. Estimación orientativa.</div>
+      </div>` : totalGainEUR<0?`<div class="alert al-info">Minusvalías de ${fmtEUR(Math.abs(totalGainEUR))} compensables con ganancias en los próximos 4 ejercicios (y hasta 25% de rendimientos del capital).</div>`:''}
+      ${sells.length>0?`<div class="section"><div class="stitle">Detalle ventas ${fiscalYear}</div>
+      <div class="tw"><table>
+        <tr><th>Fecha</th><th>Compañía</th><th>Acc.</th><th>Ingresos €</th><th>Coste FIFO €</th><th>Comis. €</th><th>Ganancia €</th></tr>
+        ${sells.map(r=>`<tr><td class="mono">${r.date}</td><td><strong>${r.company}</strong></td><td class="mono">${fmt(r.shares,4)}</td><td class="mono">${fmtEUR(r.saleRevenueEUR)}</td><td class="mono">${fmtEUR(r.costBasisEUR)}</td><td class="mono neg">${gn(r.commissionEUR)>0?fmtEUR(gn(r.commissionEUR)):'—'}</td><td class="mono ${r.gainEUR>=0?'pos':'neg'}">${(r.gainEUR>=0?'+':'')+fmtEUR(r.gainEUR)}</td></tr>`).join('')}
+      </table></div></div>`:''}
+      ${divsYear.length>0?`<div class="section"><div class="stitle">Detalle dividendos ${fiscalYear}</div>
+      <div class="tw"><table>
+        <tr><th>Fecha</th><th>Compañía</th><th>Bruto €</th><th>Retención EE.UU.</th><th>Neto €</th></tr>
+        ${divsYear.map(d=>{const g=gn(d.grossUSD)/gn(d.rateEURUSD);const w=g*gn(d.withholdingPct)/100;return`<tr><td class="mono">${d.date}</td><td><strong>${d.company}</strong></td><td class="mono pos">+${fmtEUR(g)}</td><td class="mono neg">-${fmtEUR(w)} (${d.withholdingPct}%)</td><td class="mono">${fmtEUR(g-w)}</td></tr>`;}).join('')}
+      </table></div></div>`:''}`;
+    }
+
+    if (tab === 'csv') {
+      const sampleCSV = `tipo,fecha,empresa,acciones,precio_usd,tipo_cambio_eur_usd,comision_eur,dividendo_bruto_usd,retencion_pct,deposito_usd,notas
+deposito,2024-01-10,,,,,2.50,,,1000.00,Transferencia enero
+compra,2024-01-15,AAPL,10,185.50,1.0921,5.00,,,,Compra inicial
+compra,2024-03-20,AAPL,5,171.20,1.0845,4.50,,,,Promediado
+venta,2024-06-10,AAPL,8,210.30,1.0780,4.80,,,,Venta parcial
+dividendo,2024-02-15,AAPL,,,1.0850,,24.00,15,,Q1 dividendo
+compra,2024-04-05,MSFT,3,420.00,1.0830,6.00,,,,Nueva posición`;
+      content = `
+      <div class="section"><div class="stitle">Exportar CSV fiscal</div>
+        ${yearSelector}
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn success" onclick="exportCSV()">Descargar CSV ${S.fiscalYear} ↓</button>
+          <span style="font-size:11px;color:var(--color-text-secondary)">Incluye depósitos, operaciones y dividendos del año fiscal seleccionado, con cálculo FIFO</span>
+        </div>
+      </div>
+      <div class="section"><div class="stitle">Importar CSV</div>
+        <div style="margin-bottom:10px;font-size:12px;color:var(--color-text-secondary)">Formato requerido — columnas obligatorias: <code>tipo</code>, <code>fecha</code>, <code>tipo_cambio_eur_usd</code></div>
+        <div class="code-block">${sampleCSV}</div>
+        <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:12px;line-height:1.7">
+          <strong>tipo:</strong> <code>deposito</code> · <code>compra</code> · <code>venta</code> · <code>dividendo</code><br>
+          <strong>fecha:</strong> formato YYYY-MM-DD<br>
+          <strong>tipo_cambio_eur_usd:</strong> número de EUR por 1 USD (ej: 1.0850)<br>
+          Celdas no aplicables se dejan vacías. El archivo puede tener BOM UTF-8.
+        </div>
+        <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+          <div style="font-size:13px;font-weight:500;margin-bottom:4px">Haz clic para seleccionar el archivo CSV</div>
+          <div style="font-size:11px;color:var(--color-text-secondary)">o arrastra y suelta aquí</div>
+          <input type="file" id="fileInput" accept=".csv,.txt" style="display:none" onchange="handleFileImport(this)">
+        </div>
+        ${S.importMsg?`<div class="alert ${S.importMsg.ok>0?'al-suc':'al-warn'}">${S.importMsg.text}${S.importMsg.errs&&S.importMsg.errs.length?'<br><span style="font-size:11px">'+S.importMsg.errs.join(' · ')+'</span>':''}</div>`:''}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn" onclick="downloadSample()">Descargar CSV de ejemplo ↓</button>
+          <button class="btn danger" onclick="clearAll()">Borrar todos los datos</button>
+        </div>
+      </div>`;
+    }
+
+    document.getElementById('root').innerHTML = `
+    <div>
+      <div class="tabs">
+        ${[['dashboard','Resumen'],['depositos','Depósitos'],['operaciones','Operaciones'],['dividendos','Dividendos'],['fifo','Lotes FIFO'],['fiscal','Fiscal'],['csv','CSV']].map(([t,l])=>`<button class="tab ${tab===t?'active':''}" onclick="setTab('${t}')">${l}</button>`).join('')}
+      </div>
+      ${content}
+    </div>`;
+  }
+
+  function setTab(t){S.tab=t;render();}
+  function setYear(y){S.fiscalYear=parseInt(y);render();}
+  function upDep(k,v){S.depForm[k]=v;render();}
+  function upOp(k,v){S.opForm[k]=v;render();}
+  function upDiv(k,v){S.divForm[k]=v;render();}
+
+  function addDeposit(){
+    const f=S.depForm;
+    if(!f.date||!f.amountUSD||!f.rateEURUSD){alert('Completa fecha, importe y tipo de cambio');return;}
+    S.deposits.push({...f,id:uid()});
+    S.depForm={date:f.date,amountUSD:'',rateEURUSD:f.rateEURUSD,commissionEUR:'',notes:''};
+    render();
+  }
+  function removeDeposit(id){S.deposits=S.deposits.filter(d=>d.id!==id);render();}
+
+  function addOperation(){
+    const f=S.opForm;
+    if(!f.date||!f.company||!f.shares||!f.priceUSD||!f.rateEURUSD){alert('Completa todos los campos obligatorios');return;}
+    S.operations.push({...f,id:uid()});
+    S.opForm={date:f.date,type:f.type,company:f.company,shares:'',priceUSD:'',rateEURUSD:f.rateEURUSD,commissionEUR:'',notes:''};
+    render();
+  }
+  function removeOp(id){S.operations=S.operations.filter(o=>o.id!==id);render();}
+
+  function addDiv(){
+    const f=S.divForm;
+    if(!f.date||!f.company||!f.grossUSD||!f.rateEURUSD){alert('Completa fecha, compañía, importe y tipo de cambio');return;}
+    S.dividends.push({...f,id:uid()});
+    S.divForm={date:f.date,company:f.company,grossUSD:'',withholdingPct:'15',rateEURUSD:f.rateEURUSD,notes:''};
+    render();
+  }
+  function removeDiv(id){S.dividends=S.dividends.filter(d=>d.id!==id);render();}
+
+  function handleFileImport(input){
+    const file=input.files[0];
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const text=e.target.result;
+      const {ok,errs}=parseImportCSV(text);
+      S.importMsg={ok,text:`${ok} registros importados correctamente${errs.length?' ('+errs.length+' errores)':''}`,errs};
+      input.value='';
+      render();
+    };
+    reader.readAsText(file,'UTF-8');
+  }
+
+  function downloadSample(){
+    const sample=`tipo,fecha,empresa,acciones,precio_usd,tipo_cambio_eur_usd,comision_eur,dividendo_bruto_usd,retencion_pct,deposito_usd,notas\ndeposito,2024-01-10,,,,,2.50,,,1000.00,Transferencia\ncompra,2024-01-15,AAPL,10,185.50,1.0921,5.00,,,,Compra inicial\nventa,2024-06-10,AAPL,5,210.30,1.0780,4.80,,,,Venta\ndividendo,2024-02-15,AAPL,,,1.0850,,24.00,15,,Q1`;
+    const blob=new Blob(['\uFEFF'+sample],{type:'text/csv;charset=utf-8'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='plantilla_importacion.csv';a.click();
+  }
+
+  function clearAll(){
+    if(confirm('¿Borrar TODOS los datos? Esta acción no se puede deshacer.')){
+      S.deposits=[];S.operations=[];S.dividends=[];S.importMsg=null;render();
+    }
+  }
+
+  render();
+  </script>
+
+  <!-- Registro del Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(registration => {
+            console.log('ServiceWorker registrado con éxito con el scope: ', registration.scope);
+          })
+          .catch(error => {
+            console.log('Fallo al registrar el ServiceWorker: ', error);
+          });
+      });
+    }
+  </script>
+
+</body>
+</html>
