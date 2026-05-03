@@ -1,22 +1,21 @@
 {
   "name": "Tracker Fiscal FIFO USD",
   "short_name": "Fiscal Tracker",
-  "description": "Tracker fiscal FIFO USD con dividendos, comisiones e importación CSV",
-  "start_url": "./usd_fifo_fiscal_tracker_v2.html",
+  "description": "Tracker fiscal FIFO USD con dividendos e importación CSV",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
   "icons": [
     {
-      "src": "https://img.freepik.com/vector-gratis/grafico-velas-dinamico-analisis-financiero_1308-182195.jpg?semt=ais_hybrid&w=740&q=80",
+      "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "https://img.freepik.com/vector-gratis/grafico-velas-dinamico-analisis-financiero_1308-182195.jpg?semt=ais_hybrid&w=740&q=80",
+      "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
   ]
 }
-
