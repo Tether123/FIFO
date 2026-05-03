@@ -7,7 +7,7 @@
   
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#ffffff">
-  <meta name="description" content="Tracker fiscal FIFO USD con dividendos e importación CSV">
+  <meta name="description" content="Tracker fiscal FIFO USD y Divisas con importación CSV">
 
   <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,8 +28,6 @@
   .btn.primary { background: #333; color: #fff; border-color: #333; }
   .btn.danger { color: #d32f2f; border-color: #f44336; }
   .btn.success { color: #2e7d32; border-color: #4caf50; }
-  .btn.api-btn { background: #e3f2fd; color: #1976d2; border-color: #90caf9; padding: 6px; width: 100%; font-weight: bold;}
-  .btn.api-btn:hover { background: #bbdefb; }
   .tw { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th { text-align: left; font-size: 11px; color: #666; padding: 6px; border-bottom: 1px solid #ccc; }
@@ -82,32 +80,7 @@
     }
   }
   function saveData() {
-    localStorage.setItem('fiscal_tracker_data', JSON.stringify({
-      deposits: S.deposits,
-      operations: S.operations,
-      dividends: S.dividends
-    }));
-  }
-
-  // API BCE/BOE para tipo de cambio
-  async function fetchOfficialRate(dateField, formType) {
-    const dateVal = S[formType][dateField];
-    if(!dateVal) { alert('Selecciona una fecha primero'); return; }
-    
-    try {
-      // Usamos Frankfurter API (basada en datos del Banco Central Europeo)
-      const res = await fetch(`https://api.frankfurter.app/${dateVal}?from=EUR&to=USD`);
-      if (!res.ok) throw new Error('Dato no disponible (puede ser festivo o fin de semana).');
-      const data = await res.json();
-      
-      if(data && data.rates && data.rates.USD) {
-        const rate = data.rates.USD.toFixed(4);
-        S[formType].rateEURUSD = rate;
-        render();
-      }
-    } catch(e) {
-      alert('No se encontró tipo de cambio oficial para este día (es posible que sea festivo o fin de semana). Debes buscar el del día hábil anterior.');
-    }
+    localStorage.setItem('fiscal_tracker_data', JSON.stringify({ deposits: S.deposits, operations: S.operations, dividends: S.dividends }));
   }
 
   // UTILIDADES
@@ -119,40 +92,88 @@
   const uid = () => 'id_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
   const gn = (n) => { const v=parseFloat(String(n).replace(',','.')); return isNaN(v)?0:v; };
 
-  // LÓGICA FIFO E IRPF (Se mantiene intacta)
-  function calcFIFO(ops) {
-    const lots = {}, results = [];
-    const sorted = [...ops].sort((a,b) => a.date.localeCompare(b.date));
-    for (const op of sorted) {
-      const co = op.company;
-      if (!lots[co]) lots[co] = [];
-      if (op.type === 'buy') {
-        const costEUR = (gn(op.shares)*gn(op.priceUSD))/gn(op.rateEURUSD) + gn(op.commissionEUR);
-        lots[co].push({ shares:gn(op.shares), priceUSD:gn(op.priceUSD), rateEURUSD:gn(op.rateEURUSD), commission:gn(op.commissionEUR), costEUR, date:op.date, id:op.id });
-        results.push({...op, gainEUR:null, costBasisEUR:null, remainingLots:lots[co].map(l=>({...l}))});
-      } else {
-        let toSell = gn(op.shares);
-        const queue = lots[co];
+  // MOTOR FIFO COMBINADO (ACCIONES + DIVISAS FX)
+  function calcAll() {
+    let events = [];
+    S.deposits.forEach(d => events.push({ ...d, _type: 'deposit' }));
+    S.operations.forEach(o => events.push({ ...o, _type: o.type })); // 'buy' o 'sell'
+    S.dividends.forEach(d => events.push({ ...d, _type: 'dividend' }));
+    
+    // Ordenar cronológicamente
+    events.sort((a, b) => a.date.localeCompare(b.date));
+
+    let usdQueue = []; // FIFO de Dólares
+    let stockLots = {}; // FIFO de Acciones
+    let res = { fxEvents: [], stockSells: [], stockLots, usdQueue };
+
+    for (let ev of events) {
+      let r = gn(ev.rateEURUSD);
+      
+      if (ev._type === 'deposit') {
+        usdQueue.push({ date: ev.date, amountUSD: gn(ev.amountUSD), rateEURUSD: r });
+      } 
+      else if (ev._type === 'dividend') {
+        let netUSD = gn(ev.grossUSD) * (1 - gn(ev.withholdingPct)/100);
+        usdQueue.push({ date: ev.date, amountUSD: netUSD, rateEURUSD: r });
+      } 
+      else if (ev._type === 'buy') {
+        let costUSD = gn(ev.shares) * gn(ev.priceUSD);
+        
+        // 1. GASTAR DÓLARES (Genera alteración patrimonial FX)
+        let toSpend = costUSD;
         let costBasisEUR = 0;
-        const usedLots = [];
-        while (toSell > 0.00001 && queue.length > 0) {
-          const lot = queue[0];
-          const used = Math.min(lot.shares, toSell);
-          const frac = used / lot.shares;
-          const lotCostEUR = lot.costEUR * frac;
-          costBasisEUR += lotCostEUR;
-          usedLots.push({ shares:used, priceUSD:lot.priceUSD, rateEURUSD:lot.rateEURUSD, date:lot.date, costEUR:lotCostEUR });
+        let usedLots = [];
+        while (toSpend > 0.00001 && usdQueue.length > 0) {
+          let lot = usdQueue[0];
+          let used = Math.min(lot.amountUSD, toSpend);
+          costBasisEUR += used / lot.rateEURUSD;
+          usedLots.push({ usd: used, rate: lot.rateEURUSD, date: lot.date });
+          toSpend -= used;
+          lot.amountUSD -= used;
+          if(lot.amountUSD < 0.00001) usdQueue.shift();
+        }
+        // Si falta USD en cola (ej: margen o falta de datos), se asume tipo actual (0 ganancia)
+        if (toSpend > 0.00001) costBasisEUR += toSpend / r;
+        
+        let valueTodayEUR = costUSD / r;
+        let fxGain = valueTodayEUR - costBasisEUR;
+        res.fxEvents.push({ id: ev.id, date: ev.date, spendUSD: costUSD, gainEUR: fxGain, valueTodayEUR, costBasisEUR, usedLots });
+
+        // 2. AÑADIR ACCIONES AL FIFO
+        let stockCostEUR = valueTodayEUR + gn(ev.commissionEUR||0);
+        if (!stockLots[ev.company]) stockLots[ev.company] = [];
+        stockLots[ev.company].push({ shares: gn(ev.shares), priceUSD: gn(ev.priceUSD), rateEURUSD: r, costEUR: stockCostEUR, date: ev.date });
+      } 
+      else if (ev._type === 'sell') {
+        let revUSD = gn(ev.shares) * gn(ev.priceUSD);
+        
+        // 1. RECIBIR DÓLARES
+        usdQueue.push({ date: ev.date, amountUSD: revUSD, rateEURUSD: r });
+
+        // 2. VENDER ACCIONES (Genera ganancia de capital bursátil)
+        let toSell = gn(ev.shares);
+        let sq = stockLots[ev.company] || [];
+        let stockCostBaseEUR = 0;
+        let usedLots = [];
+        while(toSell > 0.00001 && sq.length > 0) {
+          let lot = sq[0];
+          let used = Math.min(lot.shares, toSell);
+          let frac = used / lot.shares;
+          let lotCost = lot.costEUR * frac;
+          stockCostBaseEUR += lotCost;
+          usedLots.push({ shares: used, date: lot.date, costEUR: lotCost });
           toSell -= used;
           lot.shares -= used;
-          lot.costEUR -= lotCostEUR;
-          if (lot.shares < 0.00001) queue.shift();
+          lot.costEUR -= lotCost;
+          if (lot.shares < 0.00001) sq.shift();
         }
-        const saleRevenueEUR = (gn(op.shares)*gn(op.priceUSD))/gn(op.rateEURUSD) - gn(op.commissionEUR);
-        const gainEUR = saleRevenueEUR - costBasisEUR;
-        results.push({...op, gainEUR, costBasisEUR, saleRevenueEUR, usedLots, remainingLots:lots[co].map(l=>({...l}))});
+
+        let netRevEUR = (revUSD / r) - gn(ev.commissionEUR||0);
+        let stockGain = netRevEUR - stockCostBaseEUR;
+        res.stockSells.push({ id: ev.id, date: ev.date, company: ev.company, shares: gn(ev.shares), gainEUR: stockGain, revEUR: netRevEUR, costBaseEUR: stockCostBaseEUR, usedLots });
       }
     }
-    return { results, lots };
+    return res;
   }
 
   function calcIRPF(base) {
@@ -173,33 +194,32 @@
   };
   function inYear(item) { return item.date && item.date.startsWith(String(S.fiscalYear)); }
 
-  // EXPORTAR CSV (Adaptado para Excel Español)
+  // EXPORTAR CSV (Excel España)
   function exportCSV() {
-    const { results } = calcFIFO(S.operations);
-    const fifoMap = {};
-    results.forEach(r => { fifoMap[r.id] = r; });
+    const { stockSells, fxEvents } = calcAll();
+    const stockMap = {}; stockSells.forEach(r => stockMap[r.id] = r);
+    const fxMap = {}; fxEvents.forEach(r => fxMap[r.id] = r);
     
-    // Cabeceras
-    const rows = [['tipo','fecha','empresa','acciones','precio_usd','tipo_cambio_eur_usd','comision_eur','dividendo_bruto_usd','retencion_pct','deposito_usd','ingreso_eur','coste_base_eur','ganancia_eur','notas']];
+    const rows = [['tipo','fecha','empresa','acciones','precio_usd','tipo_cambio_eur_usd','comision_eur','dividendo_bruto_usd','retencion_pct','deposito_usd','ingreso_eur','coste_base_eur','ganancia_eur','ganancia_divisa_eur','notas']];
     
     S.deposits.filter(inYear).forEach(d => {
       const eur = gn(d.amountUSD)/gn(d.rateEURUSD);
-      rows.push(['deposito',d.date,'','','',d.rateEURUSD,d.commissionEUR||0,'','',d.amountUSD,eur.toFixed(2),'','',d.notes||'']);
+      rows.push(['deposito',d.date,'','','',d.rateEURUSD,d.commissionEUR||0,'','',d.amountUSD,eur.toFixed(2),'','','',d.notes||'']);
     });
     S.operations.filter(inYear).forEach(op => {
-      const r = fifoMap[op.id]||{};
-      rows.push([op.type==='buy'?'compra':'venta',op.date,op.company,op.shares,op.priceUSD,op.rateEURUSD,op.commissionEUR||0,'','','',op.type==='sell'?(r.saleRevenueEUR||0).toFixed(2):'',op.type==='sell'?(r.costBasisEUR||0).toFixed(2):'',op.type==='sell'?(r.gainEUR||0).toFixed(2):'',op.notes||'']);
+      const ss = stockMap[op.id]||{};
+      const fx = fxMap[op.id]||{};
+      rows.push([op.type==='buy'?'compra':'venta',op.date,op.company,op.shares,op.priceUSD,op.rateEURUSD,op.commissionEUR||0,'','','',op.type==='sell'?(ss.revEUR||0).toFixed(2):'',op.type==='sell'?(ss.costBaseEUR||0).toFixed(2):'',op.type==='sell'?(ss.gainEUR||0).toFixed(2):'',op.type==='buy'?(fx.gainEUR||0).toFixed(2):'',op.notes||'']);
     });
     S.dividends.filter(inYear).forEach(d => {
       const gross = gn(d.grossUSD)/gn(d.rateEURUSD);
       const wh = gross * gn(d.withholdingPct)/100;
-      rows.push(['dividendo',d.date,d.company,'','',d.rateEURUSD,0,d.grossUSD,d.withholdingPct,'',gross.toFixed(2),wh.toFixed(2),(gross-wh).toFixed(2),d.notes||'']);
+      rows.push(['dividendo',d.date,d.company,'','',d.rateEURUSD,0,d.grossUSD,d.withholdingPct,'',gross.toFixed(2),wh.toFixed(2),(gross-wh).toFixed(2),'',d.notes||'']);
     });
 
-    // Cambiar separador a ";" y los decimales a "," para Excel
     const csv = rows.map(r => r.map(v => {
       let str = String(v);
-      if(!isNaN(str) && str !== '') str = str.replace('.', ','); // Formato decimal ES
+      if(!isNaN(str) && str !== '') str = str.replace('.', ','); 
       return `"${str.replace(/"/g,'""')}"`;
     }).join(';')).join('\n');
 
@@ -210,19 +230,13 @@
     a.click();
   }
 
-  // IMPORTAR CSV (Soporta comas o puntos y comas)
+  // IMPORTAR CSV
   function parseImportCSV(text) {
     const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) return { ok:0, err:['Archivo vacío o sin datos'] };
-    
-    // Detectar separador
+    if (lines.length < 2) return { ok:0, err:['Archivo vacío'] };
     const sep = lines[0].includes(';') ? ';' : ',';
     const header = lines[0].replace(/"/g,'').toLowerCase().split(sep).map(h=>h.trim());
     const idx = (name) => header.indexOf(name);
-    
-    const required = ['tipo','fecha','tipo_cambio_eur_usd'];
-    const missing = required.filter(h => idx(h) === -1);
-    if (missing.length) return { ok:0, err:['Columnas faltantes: '+missing.join(', ')] };
     
     let ok=0; const errs=[];
     for (let i=1;i<lines.length;i++) {
@@ -237,8 +251,8 @@
       cols.push(cur.trim());
       
       const g = (name) => {
+        if(idx(name)===-1) return '';
         let val = (cols[idx(name)]||'').replace(/"/g,'').trim();
-        // Si tiene coma decimal (formato ES), convertir a punto para JS
         if (val.match(/^[0-9]+,[0-9]+$/)) val = val.replace(',', '.');
         return val;
       };
@@ -246,42 +260,48 @@
       const tipo = g('tipo').toLowerCase();
       const fecha = g('fecha');
       const rate = g('tipo_cambio_eur_usd');
-      if (!fecha||!rate) { errs.push(`Línea ${i+1}: fecha o tipo de cambio vacíos`); continue; }
+      if (!fecha||!rate) { errs.push(`Línea ${i+1}: fecha o tipo faltantes`); continue; }
       
-      try {
-        if (tipo==='deposito') {
-          S.deposits.push({ id:uid(), date:fecha, amountUSD:g('deposito_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
-          ok++;
-        } else if (tipo==='compra'||tipo==='buy') {
-          S.operations.push({ id:uid(), date:fecha, type:'buy', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
-          ok++;
-        } else if (tipo==='venta'||tipo==='sell') {
-          S.operations.push({ id:uid(), date:fecha, type:'sell', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') });
-          ok++;
-        } else if (tipo==='dividendo'||tipo==='dividend') {
-          S.dividends.push({ id:uid(), date:fecha, company:g('empresa'), grossUSD:g('dividendo_bruto_usd'), withholdingPct:g('retencion_pct')||'0', rateEURUSD:rate, notes:g('notas') });
-          ok++;
-        } else { errs.push(`Línea ${i+1}: tipo desconocido "${tipo}"`); }
-      } catch(e) { errs.push(`Línea ${i+1}: error al procesar`); }
+      if (tipo==='deposito') {
+        S.deposits.push({ id:uid(), date:fecha, amountUSD:g('deposito_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') }); ok++;
+      } else if (tipo==='compra'||tipo==='buy') {
+        S.operations.push({ id:uid(), date:fecha, type:'buy', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') }); ok++;
+      } else if (tipo==='venta'||tipo==='sell') {
+        S.operations.push({ id:uid(), date:fecha, type:'sell', company:g('empresa'), shares:g('acciones'), priceUSD:g('precio_usd'), rateEURUSD:rate, commissionEUR:g('comision_eur')||'0', notes:g('notas') }); ok++;
+      } else if (tipo==='dividendo'||tipo==='dividend') {
+        S.dividends.push({ id:uid(), date:fecha, company:g('empresa'), grossUSD:g('dividendo_bruto_usd'), withholdingPct:g('retencion_pct')||'0', rateEURUSD:rate, notes:g('notas') }); ok++;
+      }
     }
     return { ok, errs };
   }
 
   // RENDER UI
+  function renderRateInputs(formKey) {
+    let r = gn(S[formKey].rateEURUSD);
+    let eurUsd = r ? r.toFixed(4) : '';
+    let usdEur = r ? (1/r).toFixed(4) : '';
+    return `
+    <div class="field"><label>Tipo (1€ = X$)</label><input type="number" step="0.0001" value="${eurUsd}" onchange="upRate('${formKey}', this.value, false)"></div>
+    <div class="field"><label>Tipo (1$ = X€)</label><input type="number" step="0.0001" value="${usdEur}" onchange="upRate('${formKey}', this.value, true)"></div>
+    `;
+  }
+
   function render() {
     const { tab, fiscalYear } = S;
-    const { results: fifoAll, lots } = calcFIFO(S.operations);
-    const fifoYear = fifoAll.filter(inYear);
-    const depsYear = S.deposits.filter(inYear);
+    const { fxEvents, stockSells, stockLots, usdQueue } = calcAll();
+    
+    const fxYear = fxEvents.filter(inYear);
+    const ssYear = stockSells.filter(inYear);
     const divsYear = S.dividends.filter(inYear);
 
-    const totalDepEUR = depsYear.reduce((s,d)=>s+gn(d.amountUSD)/gn(d.rateEURUSD),0);
-    const sells = fifoYear.filter(r=>r.type==='sell');
-    const totalGainEUR = sells.reduce((s,r)=>s+(r.gainEUR||0),0);
+    const totalFxGainEUR = fxYear.reduce((s,r)=>s+r.gainEUR,0);
+    const totalStockGainEUR = ssYear.reduce((s,r)=>s+r.gainEUR,0);
+    const totalCapGainEUR = totalFxGainEUR + totalStockGainEUR;
+    
     const divGrossEUR = divsYear.reduce((s,d)=>s+gn(d.grossUSD)/gn(d.rateEURUSD),0);
     const divWhEUR = divsYear.reduce((s,d)=>s+(gn(d.grossUSD)/gn(d.rateEURUSD))*gn(d.withholdingPct)/100,0);
     
-    const baseAhorro = Math.max(0, totalGainEUR) + divGrossEUR;
+    const baseAhorro = Math.max(0, totalCapGainEUR) + divGrossEUR;
     const { tax, tramos } = calcIRPF(baseAhorro);
     const taxCredit = Math.min(divWhEUR, divGrossEUR * 0.19);
     const taxFinal = Math.max(0, tax - taxCredit);
@@ -297,11 +317,13 @@
       content = `
       ${yearSelector}
       <div class="metrics">
-        <div class="metric"><div class="metric-label">Depositado (EUR)</div><div class="metric-value mono">${fmtEUR(totalDepEUR)}</div></div>
-        <div class="metric"><div class="metric-label">Ganancias Netas</div><div class="metric-value mono ${totalGainEUR>=0?'pos':'neg'}">${(totalGainEUR>=0?'+':'')+fmtEUR(totalGainEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Ganancia Bursátil</div><div class="metric-value mono ${totalStockGainEUR>=0?'pos':'neg'}">${(totalStockGainEUR>=0?'+':'')+fmtEUR(totalStockGainEUR)}</div></div>
+        <div class="metric"><div class="metric-label">Ganancia Divisas (FX)</div><div class="metric-value mono ${totalFxGainEUR>=0?'pos':'neg'}">${(totalFxGainEUR>=0?'+':'')+fmtEUR(totalFxGainEUR)}</div></div>
         <div class="metric"><div class="metric-label">Dividendos Brutos</div><div class="metric-value mono pos">+${fmtEUR(divGrossEUR)}</div></div>
         <div class="metric"><div class="metric-label">IRPF Estimado</div><div class="metric-value mono ${taxFinal>0?'neg':''}">${taxFinal>0?fmtEUR(taxFinal):'—'}</div></div>
-      </div>`;
+      </div>
+      <div class="alert al-info"><b>Nota Legal:</b> Cuando compras acciones en USD, la Hacienda española lo considera una "venta" de esos dólares. La diferencia entre el coste original de adquisición de esos dólares y su valor de cambio el día de la compra, tributa como ganancia/pérdida patrimonial. Esta PWA lo calcula automáticamente (Motor FX-FIFO).</div>
+      `;
     }
 
     if (tab === 'depositos') {
@@ -310,25 +332,20 @@
         <div class="fg">
           <div class="field"><label>Fecha</label><input type="date" value="${S.depForm.date||today()}" onchange="upDep('date',this.value)"></div>
           <div class="field"><label>Importe (USD)</label><input type="number" step="0.01" value="${S.depForm.amountUSD}" onchange="upDep('amountUSD',this.value)"></div>
-          <div class="field"><label>Tipo BCE (€/$)</label>
-            <div style="display:flex;gap:4px">
-              <input type="number" step="0.0001" value="${S.depForm.rateEURUSD}" onchange="upDep('rateEURUSD',this.value)" style="width:100%">
-              <button class="btn api-btn" onclick="fetchOfficialRate('date','depForm')">🔄</button>
-            </div>
-          </div>
+          ${renderRateInputs('depForm')}
           <div class="field"><label>Comisión (€)</label><input type="number" step="0.01" value="${S.depForm.commissionEUR}" onchange="upDep('commissionEUR',this.value)"></div>
-          <div class="field"><label>Notas</label><input type="text" value="${S.depForm.notes}" onchange="upDep('notes',this.value)"></div>
         </div>
         <button class="btn primary" onclick="addDeposit()">+ Añadir depósito</button>
       </div>
       <div class="section"><div class="stitle">Historial</div>
-        ${S.deposits.length?`<div class="tw"><table><tr><th>Fecha</th><th>USD</th><th>Tipo</th><th>EUR equiv.</th><th>Acción</th></tr>
+        ${S.deposits.length?`<div class="tw"><table><tr><th>Fecha</th><th>USD</th><th>Tipo (1€=X$)</th><th>EUR equiv.</th><th>Acción</th></tr>
         ${S.deposits.map(d=>`<tr><td>${d.date}</td><td>${fmtUSD(d.amountUSD)}</td><td>${d.rateEURUSD}</td><td>${fmtEUR(gn(d.amountUSD)/gn(d.rateEURUSD))}</td><td><button class="btn danger" onclick="removeDeposit('${d.id}')">X</button></td></tr>`).join('')}
         </table></div>`:'Sin datos'}
       </div>`;
     }
 
     if (tab === 'operaciones') {
+      const fxMap = {}; fxEvents.forEach(e => fxMap[e.id] = e);
       content = `
       <div class="section"><div class="stitle">Nueva operación</div>
         <div class="fg">
@@ -337,19 +354,16 @@
           <div class="field"><label>Ticker</label><input type="text" value="${S.opForm.company}" onchange="upOp('company',this.value.toUpperCase())"></div>
           <div class="field"><label>Nº Acciones</label><input type="number" step="0.0001" value="${S.opForm.shares}" onchange="upOp('shares',this.value)"></div>
           <div class="field"><label>Precio (USD)</label><input type="number" step="0.01" value="${S.opForm.priceUSD}" onchange="upOp('priceUSD',this.value)"></div>
-          <div class="field"><label>Tipo BCE (€/$)</label>
-            <div style="display:flex;gap:4px">
-              <input type="number" step="0.0001" value="${S.opForm.rateEURUSD}" onchange="upOp('rateEURUSD',this.value)" style="width:100%">
-              <button class="btn api-btn" onclick="fetchOfficialRate('date','opForm')">🔄</button>
-            </div>
-          </div>
+          ${renderRateInputs('opForm')}
           <div class="field"><label>Comisión (€)</label><input type="number" step="0.01" value="${S.opForm.commissionEUR}" onchange="upOp('commissionEUR',this.value)"></div>
         </div>
         <button class="btn primary" onclick="addOperation()">+ Añadir operación</button>
       </div>
       <div class="section"><div class="stitle">Historial</div>
-        ${S.operations.length?`<div class="tw"><table><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Acciones</th><th>Precio USD</th><th>Total EUR</th><th>Acción</th></tr>
-        ${S.operations.map(op=>`<tr><td>${op.date}</td><td><span class="badge b-${op.type}">${op.type}</span></td><td><b>${op.company}</b></td><td>${op.shares}</td><td>${fmtUSD(op.priceUSD)}</td><td>${fmtEUR(gn(op.shares)*gn(op.priceUSD)/gn(op.rateEURUSD))}</td><td><button class="btn danger" onclick="removeOp('${op.id}')">X</button></td></tr>`).join('')}
+        ${S.operations.length?`<div class="tw"><table><tr><th>Fecha</th><th>Tipo</th><th>Ticker</th><th>Acciones</th><th>Precio USD</th><th>Total EUR</th><th>Info FX</th><th>Acción</th></tr>
+        ${S.operations.map(op=>`<tr><td>${op.date}</td><td><span class="badge b-${op.type}">${op.type}</span></td><td><b>${op.company}</b></td><td>${op.shares}</td><td>${fmtUSD(op.priceUSD)}</td><td>${fmtEUR(gn(op.shares)*gn(op.priceUSD)/gn(op.rateEURUSD))}</td>
+        <td>${op.type==='buy' && fxMap[op.id] ? `<span class="${fxMap[op.id].gainEUR>=0?'pos':'neg'}">FX: ${fmtEUR(fxMap[op.id].gainEUR)}</span>`:''}</td>
+        <td><button class="btn danger" onclick="removeOp('${op.id}')">X</button></td></tr>`).join('')}
         </table></div>`:'Sin datos'}
       </div>`;
     }
@@ -362,12 +376,7 @@
           <div class="field"><label>Ticker</label><input type="text" value="${S.divForm.company}" onchange="upDiv('company',this.value.toUpperCase())"></div>
           <div class="field"><label>Bruto (USD)</label><input type="number" step="0.01" value="${S.divForm.grossUSD}" onchange="upDiv('grossUSD',this.value)"></div>
           <div class="field"><label>Retención (%)</label><input type="number" step="0.1" value="${S.divForm.withholdingPct}" onchange="upDiv('withholdingPct',this.value)"></div>
-          <div class="field"><label>Tipo BCE (€/$)</label>
-            <div style="display:flex;gap:4px">
-              <input type="number" step="0.0001" value="${S.divForm.rateEURUSD}" onchange="upDiv('rateEURUSD',this.value)" style="width:100%">
-              <button class="btn api-btn" onclick="fetchOfficialRate('date','divForm')">🔄</button>
-            </div>
-          </div>
+          ${renderRateInputs('divForm')}
         </div>
         <button class="btn primary" onclick="addDiv()">+ Añadir dividendo</button>
       </div>
@@ -379,52 +388,67 @@
     }
 
     if (tab === 'csv') {
-      const sampleCSV = `tipo;fecha;empresa;acciones;precio_usd;tipo_cambio_eur_usd;comision_eur;dividendo_bruto_usd;retencion_pct;deposito_usd;notas
-deposito;2024-01-10;;;;1,0850;2,50;;;1000,00;Transferencia
-compra;2024-01-15;AAPL;10;185,50;1,0921;5,00;;;;Compra inicial
-venta;2024-06-10;AAPL;8;210,30;1,0780;4,80;;;;Venta
-dividendo;2024-02-15;AAPL;;;1,0850;;24,00;15;;;Q1 dividendo`;
+      const sampleCSV = `tipo;fecha;empresa;acciones;precio_usd;tipo_cambio_eur_usd;comision_eur;dividendo_bruto_usd;retencion_pct;deposito_usd
+deposito;2024-01-10;;;;1,0850;2,50;;;1000,00
+compra;2024-01-15;AAPL;10;185,50;1,0921;5,00;;;
+venta;2024-06-10;AAPL;8;210,30;1,0780;4,80;;;
+dividendo;2024-02-15;AAPL;;;1,0850;;24,00;15;`;
       content = `
       <div class="section"><div class="stitle">Importar / Exportar (Excel)</div>
         ${yearSelector}
         <button class="btn success" onclick="exportCSV()">Descargar CSV de ${S.fiscalYear} ↓</button>
         <hr style="margin:15px 0; border:0; border-top:1px solid #eee">
-        <p style="font-size:12px;margin-bottom:10px;"><b>Importar archivo (Compatible con Excel, separador ";"):</b></p>
+        <p style="font-size:12px;margin-bottom:10px;"><b>Importar archivo (Excel, separador ";"):</b></p>
         <input type="file" id="fileInput" accept=".csv,.txt" onchange="handleFileImport(this)">
         ${S.importMsg?`<div class="alert ${S.importMsg.ok>0?'al-suc':'neg'}" style="margin-top:10px">${S.importMsg.text}</div>`:''}
-        <div class="code-block" style="margin-top:10px;">Ejemplo de formato esperado:\n${sampleCSV}</div>
+        <div class="code-block" style="margin-top:10px;">Ejemplo:\n${sampleCSV}</div>
         <hr style="margin:15px 0; border:0; border-top:1px solid #eee">
-        <button class="btn danger" onclick="clearAll()">Borrar todos los datos locales</button>
+        <button class="btn danger" onclick="clearAll()">Borrar datos locales</button>
       </div>`;
     }
 
-    // Pestañas Fiscal y FIFO resumidas para no saturar
     if (tab === 'fifo') {
-      content = `<div class="alert al-info">Coste base incluye comisiones. Criterio FIFO (art. 37 LIRPF).</div>`;
-      content += [...new Set(S.operations.map(o=>o.company))].map(co=>`
-        <div class="section"><div class="stitle">${co}</div>
-        ${fifoAll.filter(r=>r.company===co).map(op=>`
-          <div style="border-bottom:1px solid #eee;padding:8px 0;font-size:12px;">
-            <b>${op.type==='buy'?'COMPRA':'VENTA'}</b> ${op.date}: ${op.shares} acc × ${fmtUSD(op.priceUSD)}
-            ${op.type==='sell'?`<span class="${op.gainEUR>=0?'pos':'neg'}"> (Ganancia: ${fmtEUR(op.gainEUR)})</span>`:''}
+      content = `<div class="alert al-info">FIFO: Primero que entra, primero que sale. Aplicado a acciones y al saldo en Dólares.</div>`;
+      
+      let totalUSD = usdQueue.reduce((s,l)=>s+l.amountUSD,0);
+      content += `<div class="section"><div class="stitle" style="color:#1976d2">Saldo FIFO Divisa (USD) — Total: ${fmtUSD(totalUSD)}</div>`;
+      if(usdQueue.length===0) content += `<div style="font-size:12px;color:#666">Caja a cero.</div>`;
+      content += usdQueue.map(l=>`<div style="border-bottom:1px solid #eee;padding:6px 0;font-size:12px;"><b>Lote ${l.date}</b>: ${fmtUSD(l.amountUSD)} (Adquirido a 1€ = ${fmt(l.rateEURUSD,4)}$)</div>`).join('');
+      content += `</div>`;
+
+      content += Object.keys(stockLots).map(co=>`
+        <div class="section"><div class="stitle">Cartera: ${co}</div>
+        ${stockLots[co].length===0?`<div style="font-size:12px;color:#666">Posición cerrada.</div>`:''}
+        ${stockLots[co].map(l=>`
+          <div style="border-bottom:1px solid #eee;padding:6px 0;font-size:12px;">
+            <b>Lote ${l.date}</b>: ${l.shares} acc × ${fmtUSD(l.priceUSD)} <br>
+            <span style="color:#666">Coste Total EUR (incl. comis.): ${fmtEUR(l.costEUR)}</span>
           </div>
         `).join('')}</div>`).join('');
     }
 
     if (tab === 'fiscal') {
       content = `${yearSelector}<div class="section"><div class="stitle">Base imponible del ahorro ${fiscalYear}</div>
-      <div class="tramo"><span>Ganancias Patrimoniales:</span> <span class="mono">${fmtEUR(totalGainEUR)}</span></div>
+      <div class="tramo"><span>G/P Acciones (FIFO Bursátil):</span> <span class="mono ${totalStockGainEUR>=0?'pos':'neg'}">${fmtEUR(totalStockGainEUR)}</span></div>
+      <div class="tramo"><span>G/P Divisas (FIFO USD):</span> <span class="mono ${totalFxGainEUR>=0?'pos':'neg'}">${fmtEUR(totalFxGainEUR)}</span></div>
+      <div class="tramo" style="background:#f9f9f9"><span><b>Total Ganancias Patrimoniales:</b></span> <b class="mono">${fmtEUR(totalCapGainEUR)}</b></div>
       <div class="tramo"><span>Rendimientos de capital (Dividendos):</span> <span class="mono pos">+${fmtEUR(divGrossEUR)}</span></div>
-      <div class="tramo"><b>Base Total:</b> <b class="mono">${fmtEUR(baseAhorro)}</b></div>
+      <div class="tramo" style="border-top:1px solid #ccc; padding-top:12px; margin-top:4px;"><b>Base Total:</b> <b class="mono">${fmtEUR(baseAhorro)}</b></div>
       <div class="tramo"><span>Cuota Bruta IRPF:</span> <span class="mono neg">${fmtEUR(tax)}</span></div>
       <div class="tramo"><span>Deducción doble imposición:</span> <span class="mono pos">-${fmtEUR(taxCredit)}</span></div>
       <div class="tramo"><b>Cuota a Pagar:</b> <b class="mono neg">${fmtEUR(taxFinal)}</b></div>
-      </div>`;
+      </div>
+      
+      ${fxYear.length ? `<div class="section"><div class="stitle">Detalle Divisas (FX) ${fiscalYear}</div>
+      <div class="tw"><table><tr><th>Fecha (Compra Stock)</th><th>USD Gastados</th><th>Coste Original EUR</th><th>Valor Compra EUR</th><th>G/P Divisa</th></tr>
+      ${fxYear.map(f=>`<tr><td>${f.date}</td><td>${fmtUSD(f.spendUSD)}</td><td>${fmtEUR(f.costBasisEUR)}</td><td>${fmtEUR(f.valueTodayEUR)}</td><td class="mono ${f.gainEUR>=0?'pos':'neg'}">${fmtEUR(f.gainEUR)}</td></tr>`).join('')}
+      </table></div></div>` : ''}
+      `;
     }
 
     document.getElementById('root').innerHTML = `
       <div class="tabs">
-        ${[['dashboard','Resumen'],['depositos','Depósitos'],['operaciones','Operaciones'],['dividendos','Dividendos'],['fifo','Lotes FIFO'],['fiscal','Impuestos'],['csv','Datos']].map(([t,l])=>`<button class="tab ${tab===t?'active':''}" onclick="setTab('${t}')">${l}</button>`).join('')}
+        ${[['dashboard','Resumen'],['depositos','Ingresos'],['operaciones','Operaciones'],['dividendos','Dividendos'],['fifo','Cartera/Lotes'],['fiscal','Impuestos'],['csv','Datos']].map(([t,l])=>`<button class="tab ${tab===t?'active':''}" onclick="setTab('${t}')">${l}</button>`).join('')}
       </div>
       ${content}
     `;
@@ -436,6 +460,16 @@ dividendo;2024-02-15;AAPL;;;1,0850;;24,00;15;;;Q1 dividendo`;
   function upDep(k,v){S.depForm[k]=v;}
   function upOp(k,v){S.opForm[k]=v;}
   function upDiv(k,v){S.divForm[k]=v;}
+  
+  function upRate(formKey, val, isInverse) {
+    let r = parseFloat(val);
+    if (r && r > 0) {
+      S[formKey].rateEURUSD = isInverse ? (1 / r).toFixed(4) : r.toFixed(4);
+    } else {
+      S[formKey].rateEURUSD = '';
+    }
+    render();
+  }
 
   function addDeposit(){
     if(!S.depForm.date||!S.depForm.amountUSD||!S.depForm.rateEURUSD){alert('Faltan datos');return;}
@@ -476,7 +510,6 @@ dividendo;2024-02-15;AAPL;;;1,0850;;24,00;15;;;Q1 dividendo`;
     reader.onload=e=>{
       const {ok,errs}=parseImportCSV(e.target.result);
       S.importMsg={ok,text:`${ok} registros importados.${errs.length?' Hubo errores, revisa consola.':''}`};
-      if (errs.length) console.log("Errores importación:", errs);
       input.value='';
       saveData();
       render();
@@ -494,4 +527,3 @@ dividendo;2024-02-15;AAPL;;;1,0850;;24,00;15;;;Q1 dividendo`;
   </script>
 </body>
 </html>
-
