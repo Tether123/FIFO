@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fiscal-tracker-v3';
+const CACHE_NAME = 'fiscal-tracker-v4';
 
 const URLS_TO_CACHE = [
   './',
@@ -13,7 +13,7 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(URLS_TO_CACHE))
-      .catch(err => console.log('Info: Faltan iconos, pero el SW funciona', err))
+      .catch(err => console.log('Info: Faltan iconos, el SW continuará', err))
   );
 });
 
@@ -25,9 +25,8 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Estrategia: Network first, fallback to cache
 self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET' || event.request.url.includes('api.frankfurter')) return;
+  if (event.request.method !== 'GET') return;
   
   event.respondWith(
     fetch(event.request)
