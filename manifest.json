@@ -1,7 +1,7 @@
 {
   "name": "Tracker Fiscal FIFO",
   "short_name": "Fiscal Tracker",
-  "description": "Tracker fiscal FIFO USD con conexión BCE e importación/exportación CSV Excel",
+  "description": "Tracker fiscal FIFO de Acciones y Divisas (FX) con importación/exportación CSV Excel",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#ffffff",
