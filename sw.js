@@ -1,6 +1,5 @@
 const CACHE_NAME = 'fiscal-tracker-v1';
 
-// Añadir aquí los recursos que deben funcionar offline
 const URLS_TO_CACHE = [
   './',
   './usd_fifo_fiscal_tracker_v2.html',
